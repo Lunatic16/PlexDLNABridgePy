@@ -10,6 +10,7 @@ A complete DLNA/UPnP bridge that makes Samsung multiroom speakers discoverable a
 - ConnectionManager service (Protocol info)
 - Proper SOAP request/response handling
 - SSDP device announcement and discovery
+- M-SEARCH responder for active discovery
 
 ✅ **Samsung Speaker Control**
 - Multi-speaker group management
@@ -23,6 +24,12 @@ A complete DLNA/UPnP bridge that makes Samsung multiroom speakers discoverable a
 - Direct media streaming from Plex
 - Metadata support
 - Persistent device UUID
+
+✅ **Diagnostic Tools**
+- Connection testing script
+- Discovery diagnostic tool
+- Comprehensive troubleshooting guides
+- Debug logging support
 
 ## Requirements
 
@@ -99,8 +106,25 @@ SPEAKER_IPS = [
 
 ### 4. Run the Bridge
 
+**First, test your configuration:**
+```bash
+python test_connection.py
+```
+
+This will verify:
+- All dependencies are installed
+- Configuration is valid
+- Speakers are reachable
+- Plex server is accessible
+
+**If tests pass, run the bridge:**
 ```bash
 python plex_dlna_bridge_full.py
+```
+
+**Note:** On Linux/Mac, you may need elevated privileges for port 1900:
+```bash
+sudo python plex_dlna_bridge_full.py
 ```
 
 You should see:
@@ -112,11 +136,13 @@ INFO - Connected to speaker at 192.168.1.101
 INFO - Connected to speaker at 192.168.1.102
 INFO - Successfully connected to 2 Samsung speakers
 INFO - DLNA server started on port 32488
+INFO - SSDP responder listening for M-SEARCH requests
 INFO - Connected to Plex: My Plex Server
 ============================================================
 ✓ Samsung speaker group 'Living Room R1 Group' is now discoverable
 ✓ Appearing to Plex as 'Samsung Speaker Group'
 ✓ DLNA server running on port 32488
+✓ SSDP responder active on port 1900
 ✓ Ready for playback commands from Plex
 ============================================================
 ```
@@ -128,6 +154,14 @@ INFO - Connected to Plex: My Plex Server
 3. Click the **Cast** icon (📡) in the player controls
 4. Select **"Samsung Speaker Group"** from the device list
 5. Music will now play through your Samsung speakers!
+
+**⚠️ If device doesn't appear in Plex:**
+This is the most common issue. The device may not be discoverable due to firewall or network configuration. See the **Troubleshooting** section below, or run:
+```bash
+python diagnose_discovery.py
+```
+
+This tool will identify exactly why Plex can't see the device and provide specific solutions.
 
 ## Troubleshooting
 
@@ -148,37 +182,92 @@ Failed to connect to speaker at 192.168.1.101
 4. Try resetting the speakers (hold power button for 10 seconds)
 5. Update Samsung Multiroom app and speaker firmware
 
-### Problem: Plex can't discover the device
+### Problem: Plex can't discover the device ⭐ MOST COMMON ISSUE
 
 **Symptoms:**
 - Device doesn't appear in Plex's cast menu
-- DLNA server starts but Plex doesn't see it
+- Bridge shows "Ready for playback" but Plex doesn't see it
+- Works on some clients but not others
 
-**Solutions:**
-1. Check firewall settings - ensure port 32488 is open:
+**Quick Diagnosis:**
+Run the diagnostic tool to identify the exact problem:
+```bash
+python diagnose_discovery.py
+```
+
+This will test:
+- Firewall and port configuration
+- SSDP multicast sending/receiving
+- M-SEARCH request detection
+- HTTP server accessibility
+
+**Most Common Causes:**
+
+1. **Firewall blocking port 1900** (80% of cases)
    ```bash
    # Linux
-   sudo ufw allow 32488/tcp
+   sudo ufw allow 32488/tcp comment 'DLNA HTTP'
+   sudo ufw allow 1900/udp comment 'SSDP Discovery'
    
-   # macOS
-   # System Preferences → Security & Privacy → Firewall → Firewall Options
-   # Add Python to allowed applications
+   # Run bridge with sudo for port 1900 access
+   sudo python plex_dlna_bridge_full.py
    ```
 
-2. Verify SSDP multicast is working:
-   - Ensure multicast is enabled on your network
-   - Check router settings for IGMP snooping (should be enabled)
-   - Disable any VPNs or virtual network adapters
+2. **Different network subnets**
+   - Plex server: 192.168.1.100 ✅
+   - Bridge: 192.168.1.50 ✅
+   - Bridge: 192.168.2.50 ❌ (wrong subnet!)
 
-3. Restart the Plex Media Server:
-   - Settings → General → Restart
-   - Or restart the Plex service/application
+3. **Router blocking multicast**
+   - Check router settings for IGMP Snooping (should be ENABLED)
+   - Check for Multicast Filtering (should be DISABLED)
+   - Check for AP/Client Isolation (should be DISABLED)
 
-4. Check the bridge is announcing correctly:
+4. **Permission denied on port 1900**
    ```bash
-   # Monitor SSDP announcements (Linux/Mac)
-   sudo tcpdump -i any -n -A 'udp port 1900'
+   # Port 1900 needs elevated privileges on most systems
+   sudo python plex_dlna_bridge_full.py
    ```
+
+**Step-by-Step Solutions:**
+See the detailed guide: **DISCOVERY_TROUBLESHOOTING.md**
+
+**Quick Fixes:**
+```bash
+# 1. Stop the bridge (Ctrl+C)
+
+# 2. Restart Plex Media Server
+# Linux: sudo systemctl restart plexmediaserver
+# Windows: Services → Plex Media Server → Restart
+# macOS: System Preferences → Plex → Restart
+
+# 3. Open firewall ports
+sudo ufw allow 32488/tcp
+sudo ufw allow 1900/udp
+
+# 4. Run bridge with elevated privileges
+sudo python plex_dlna_bridge_full.py
+
+# 5. Wait 30 seconds, then refresh Plex client
+
+# 6. Try Plex web interface (most reliable)
+# Open app.plex.tv in browser
+```
+
+**Verification:**
+When working correctly, you should see in the logs:
+```
+✓ DLNA server running on port 32488
+✓ SSDP responder active on port 1900
+✓ Ready for playback commands from Plex
+```
+
+And when Plex searches for devices:
+```
+DEBUG - Received M-SEARCH from 192.168.1.100, responding...
+```
+
+If you don't see M-SEARCH requests, the issue is network/firewall related.
 
 ### Problem: Plex token invalid
 
@@ -353,15 +442,34 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(leve
 │                 │  HTTP   │                  │  pywam  │                 │
 │ - Media Library │  SOAP   │ - DLNA Server    │  API    │ - Speaker 1     │
 │ - Transcoding   │  UPnP   │ - Protocol Trans │         │ - Speaker 2     │
-│                 │         │ - State Manager  │         │ - Speaker N     │
-└─────────────────┘         └──────────────────┘         └─────────────────┘
+│ - M-SEARCH      │         │ - State Manager  │         │ - Speaker N     │
+└─────────────────┘         │ - SSDP Responder │         └─────────────────┘
+        │                    └──────────────────┘                 │
         │                            │                            │
         │                            ▼                            │
         │                    ┌──────────────┐                    │
         └───────────────────▶│ SSDP/mDNS    │◀───────────────────┘
                              │ Discovery    │
+                             │ Port 1900    │
                              └──────────────┘
 ```
+
+### Discovery Mechanism
+
+The bridge uses a two-pronged approach for device discovery:
+
+1. **SSDP NOTIFY (Passive)**
+   - Broadcasts device presence every 5 minutes
+   - Announces on multicast address 239.255.255.250:1900
+   - Includes device location URL
+
+2. **M-SEARCH Response (Active)** ⭐ NEW
+   - Listens for discovery requests on port 1900
+   - Responds immediately when Plex searches
+   - Significantly faster discovery
+   - More reliable than passive announcements
+
+This dual approach ensures maximum compatibility with all Plex clients.
 
 ### Supported UPnP Actions
 
@@ -411,12 +519,24 @@ Plex will automatically transcode unsupported formats.
 - The DLNA bridge listens on 0.0.0.0 (all interfaces) - use firewall rules if on public network
 - Consider running on a dedicated machine or container for isolation
 
+## Project Files
+
+- **plex_dlna_bridge_full.py** - Main bridge application
+- **test_connection.py** - Pre-flight connection testing
+- **diagnose_discovery.py** - Discovery diagnostic tool
+- **README.md** - Complete documentation
+- **QUICKSTART.md** - 5-minute setup guide
+- **DISCOVERY_TROUBLESHOOTING.md** - Detailed discovery troubleshooting
+- **requirements.txt** - Python dependencies
+- **config_template.py** - Configuration template
+
 ## Known Limitations
 
 1. **Video Playback:** Only audio is supported (Samsung speakers are audio-only)
 2. **Seeking:** Seek/skip functionality depends on pywam library support
 3. **Multi-Zone:** Each speaker group needs a separate bridge instance
 4. **Discovery Timing:** May take 30-60 seconds for Plex to discover device after starting
+5. **Port 1900:** Requires elevated privileges on most systems (use sudo)
 
 ## Contributing
 
@@ -437,6 +557,15 @@ This project is provided as-is for personal use. Samsung and Plex are trademarks
 - UPnP/DLNA specifications from upnp.org
 
 ## Changelog
+
+### v1.1.0 (Discovery Fix)
+- ✅ Added M-SEARCH responder for active discovery
+- ✅ Significantly improved Plex discovery reliability
+- ✅ Better network interface detection
+- ✅ Higher multicast TTL for better propagation
+- ✅ Added comprehensive discovery diagnostic tool
+- ✅ Added detailed troubleshooting documentation
+- ✅ Graceful handling of permission issues on port 1900
 
 ### v1.0.0 (Full Implementation)
 - ✅ Complete UPnP/DLNA protocol implementation

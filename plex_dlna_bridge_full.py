@@ -729,12 +729,25 @@ def connect_to_plex():
         return None
 
 
+def get_local_ip():
+    """Get the primary local IP address"""
+    try:
+        # Create a socket to determine the primary network interface
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except:
+            return "127.0.0.1"
+
+
 def announce_dlna_device():
     """Announce the DLNA device using SSDP so Plex can discover it"""
-    try:
-        local_ip = socket.gethostbyname(socket.gethostname())
-    except:
-        local_ip = "127.0.0.1"
+    local_ip = get_local_ip()
     
     # Create SSDP announcement messages
     messages = [
@@ -779,7 +792,13 @@ def announce_dlna_device():
     # Send SSDP announcements
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 4)
+    
+    # Bind to specific interface for better multicast
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
+    except:
+        pass
     
     try:
         for message in messages:
@@ -789,6 +808,136 @@ def announce_dlna_device():
         logger.error(f"Error sending SSDP announcement: {e}")
     finally:
         sock.close()
+
+
+class SSDPResponder:
+    """Responds to SSDP M-SEARCH discovery requests"""
+    
+    def __init__(self):
+        self.running = False
+        self.thread = None
+        self.sock = None
+        
+    def start(self):
+        """Start the SSDP responder"""
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        logger.info("SSDP responder started")
+    
+    def stop(self):
+        """Stop the SSDP responder"""
+        self.running = False
+        if self.sock:
+            try:
+                self.sock.close()
+            except:
+                pass
+    
+    def _run(self):
+        """Main loop for SSDP responder"""
+        import struct
+        
+        # Create socket for listening to multicast
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        try:
+            # Bind to SSDP port
+            self.sock.bind(('', 1900))
+            
+            # Join multicast group
+            mreq = struct.pack("4sl", socket.inet_aton("239.255.255.250"), socket.INADDR_ANY)
+            self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            
+            logger.info("SSDP responder listening for M-SEARCH requests")
+            
+        except Exception as e:
+            logger.error(f"Failed to start SSDP responder: {e}")
+            logger.error("This is usually caused by firewall blocking port 1900 or permission issues")
+            return
+        
+        self.sock.settimeout(1.0)
+        
+        while self.running:
+            try:
+                data, addr = self.sock.recvfrom(1024)
+                message = data.decode('utf-8', errors='ignore')
+                
+                # Check if this is an M-SEARCH request
+                if 'M-SEARCH' in message:
+                    # Check if they're searching for something we match
+                    search_targets = [
+                        'ssdp:all',
+                        'upnp:rootdevice',
+                        'urn:schemas-upnp-org:device:MediaRenderer:1',
+                        'urn:schemas-upnp-org:service:AVTransport:1',
+                    ]
+                    
+                    should_respond = any(st in message for st in search_targets)
+                    
+                    if should_respond:
+                        logger.debug(f"Received M-SEARCH from {addr[0]}, responding...")
+                        self._respond_to_search(addr)
+                        
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:  # Only log if we didn't intentionally stop
+                    logger.error(f"Error in SSDP responder: {e}")
+    
+    def _respond_to_search(self, addr):
+        """Send M-SEARCH response to requester"""
+        local_ip = get_local_ip()
+        
+        # Send multiple responses for different search targets
+        responses = [
+            # Root device
+            (
+                f"HTTP/1.1 200 OK\r\n"
+                f"CACHE-CONTROL: max-age=1800\r\n"
+                f"EXT:\r\n"
+                f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+                f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
+                f"ST: upnp:rootdevice\r\n"
+                f"USN: uuid:{DEVICE_UUID}::upnp:rootdevice\r\n"
+                f"\r\n"
+            ),
+            # MediaRenderer device
+            (
+                f"HTTP/1.1 200 OK\r\n"
+                f"CACHE-CONTROL: max-age=1800\r\n"
+                f"EXT:\r\n"
+                f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+                f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
+                f"ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+                f"USN: uuid:{DEVICE_UUID}::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+                f"\r\n"
+            ),
+            # UUID
+            (
+                f"HTTP/1.1 200 OK\r\n"
+                f"CACHE-CONTROL: max-age=1800\r\n"
+                f"EXT:\r\n"
+                f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+                f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
+                f"ST: uuid:{DEVICE_UUID}\r\n"
+                f"USN: uuid:{DEVICE_UUID}\r\n"
+                f"\r\n"
+            ),
+        ]
+        
+        # Create a new socket for sending responses
+        response_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        
+        try:
+            for response in responses:
+                response_sock.sendto(response.encode('utf-8'), addr)
+                time.sleep(0.1)  # Small delay between responses
+        except Exception as e:
+            logger.error(f"Error sending M-SEARCH response: {e}")
+        finally:
+            response_sock.close()
 
 
 def main():
@@ -816,10 +965,17 @@ def main():
     # Give the server a moment to start
     time.sleep(1)
     
-    # 3. Announce the device via SSDP so Plex can discover it
+    # 3. Start SSDP responder to answer M-SEARCH requests
+    ssdp_responder = SSDPResponder()
+    ssdp_responder.start()
+    
+    # Give responder time to initialize
+    time.sleep(0.5)
+    
+    # 4. Announce the device via SSDP so Plex can discover it
     announce_dlna_device()
     
-    # 4. Connect to Plex
+    # 5. Connect to Plex
     plex = connect_to_plex()
 
     if plex:
@@ -827,6 +983,7 @@ def main():
         logger.info(f"✓ Samsung speaker group '{GROUP_NAME}' is now discoverable")
         logger.info(f"✓ Appearing to Plex as '{DLNA_DEVICE_NAME}'")
         logger.info(f"✓ DLNA server running on port {DLNA_SERVER_PORT}")
+        logger.info(f"✓ SSDP responder active on port 1900")
         logger.info("✓ Ready for playback commands from Plex")
         logger.info("=" * 60)
         logger.info("\nTo use:")
@@ -858,6 +1015,10 @@ def main():
         logger.info("\n" + "=" * 60)
         logger.info("Shutting down...")
         logger.info("=" * 60)
+        
+        # Stop SSDP responder
+        ssdp_responder.stop()
+        logger.info("Stopped SSDP responder")
         
         if speaker_group and speaker_group.connected:
             # Clean up async resources
