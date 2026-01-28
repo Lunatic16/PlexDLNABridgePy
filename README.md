@@ -442,7 +442,7 @@ LOG_LEVEL = 'DEBUG'
 
 ```
 ┌─────────────────┐          ┌──────────────────┐          ┌─────────────────┐
-│   Plex Server   │────────▶│  DLNA Bridge     │────────▶│ Samsung Speakers│
+│   Plex Server   │─────────▶│  DLNA Bridge     │─────────▶│ Samsung Speakers│
 │                 │  HTTP    │                  │  pywam   │                 │
 │ - Media Library │  SOAP    │ - DLNA Server    │  API     │ - Speaker 1     │
 │ - Transcoding   │  UPnP    │ - Protocol Trans │          │ - Speaker 2     │
@@ -452,7 +452,7 @@ LOG_LEVEL = 'DEBUG'
         │                            │                             │
         │                            ▼                             │
         │                    ┌──────────────┐                      │
-        └──────────────────▶│ SSDP/mDNS    │◀────────────────────┘
+        └───────────────────▶│ SSDP/mDNS    │◀─────────────────────┘
                              │ Discovery    │
                              │ Port 1900    │
                              └──────────────┘
