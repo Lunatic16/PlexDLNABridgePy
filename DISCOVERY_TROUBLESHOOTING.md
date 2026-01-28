@@ -203,13 +203,13 @@ sudo tcpdump -i any -n -A 'udp port 1900'
 
 ## 🐛 Step 7: Enable Debug Logging
 
-Edit `plex_dlna_bridge_full.py` and change:
+Edit `config.py` and change:
 ```python
-logging.basicConfig(level=logging.INFO, ...)
+LOG_LEVEL = 'INFO'
 ```
 to:
 ```python
-logging.basicConfig(level=logging.DEBUG, ...)
+LOG_LEVEL = 'DEBUG'
 ```
 
 Run the bridge again and look for:
@@ -248,7 +248,7 @@ sudo netstat -tulpn | grep 32488
 # Windows:
 netstat -ano | findstr :32488
 
-# Kill the process or change the port in the script:
+# Kill the process or change the port in config.py:
 DLNA_SERVER_PORT = 32489
 ```
 
@@ -257,7 +257,7 @@ DLNA_SERVER_PORT = 32489
 
 **Solution:**
 1. Use wired connection instead of WiFi
-2. Increase announcement frequency (edit script):
+2. Increase announcement frequency (edit `plex_dlna_bridge_full.py`):
    ```python
    announcement_interval = 60  # Changed from 300
    ```

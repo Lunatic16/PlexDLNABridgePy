@@ -44,7 +44,12 @@ https://app.plex.tv/...?X-Plex-Token=abc123xyz789&...
 
 ### Step 4: Configure the Bridge (1 minute)
 
-Edit `plex_dlna_bridge_full.py`:
+1. Copy the template:
+```bash
+cp config_template.py config.py
+```
+
+2. Edit `config.py`:
 
 ```python
 # Find this section near the top:
@@ -155,7 +160,7 @@ netstat -an | grep 32488
 - [ ] Dependencies installed (pywam, plexapi, requests)
 - [ ] Samsung speaker IPs found
 - [ ] Plex token obtained
-- [ ] Configuration updated in script
+- [ ] Configuration updated in `config.py`
 - [ ] Script runs without errors
 - [ ] Speakers show "Connected" in logs
 - [ ] Plex connection successful
@@ -168,7 +173,7 @@ netstat -an | grep 32488
 
 1. **Read the full README.md** - Has detailed troubleshooting
 2. **Check the logs** - Script prints detailed info about what's happening
-3. **Enable debug logging** - Change `logging.INFO` to `logging.DEBUG` in the script
+3. **Enable debug logging** - Change `LOG_LEVEL = 'DEBUG'` in `config.py`
 4. **Test individual components** - Use the test script (test_connection.py)
 
 ---

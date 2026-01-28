@@ -20,8 +20,15 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 # Configuration
-DLNA_SERVER_PORT = 32488
-DEVICE_UUID = "3c202906-2b86-4f88-a79c-f6d4e7c8d1a3"
+try:
+    import config
+    DLNA_SERVER_PORT = config.DLNA_SERVER_PORT
+    DEVICE_UUID = config.DEVICE_UUID
+except ImportError:
+    print("⚠️  Warning: config.py not found, using default values")
+    DLNA_SERVER_PORT = 32488
+    DEVICE_UUID = "3c202906-2b86-4f88-a79c-f6d4e7c8d1a3"
+
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
 

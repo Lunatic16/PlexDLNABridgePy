@@ -18,16 +18,16 @@ import asyncio
 import sys
 from plexapi.server import PlexServer
 
-# Import configuration from the main script
-# If using config.py, import from there instead
+# Import configuration from config.py
 try:
-    from plex_dlna_bridge_full import (
+    from config import (
         PLEX_URL, PLEX_TOKEN, SPEAKER_IPS, 
         DLNA_SERVER_PORT, DLNA_DEVICE_NAME
     )
 except ImportError:
-    print("❌ Error: Could not import configuration from plex_dlna_bridge_full.py")
+    print("❌ Error: Could not import configuration from config.py")
     print("   Make sure the file exists in the same directory.")
+    print("   If missing, copy config_template.py to config.py and configure it.")
     sys.exit(1)
 
 # Try to import pywam
@@ -326,7 +326,7 @@ def main():
         print("⚠️  Some tests failed. Please fix the issues above.")
         print("\nCommon fixes:")
         print("  1. Install missing dependencies: pip install pywam plexapi requests")
-        print("  2. Check your configuration in plex_dlna_bridge_full.py")
+        print("  2. Check your configuration in config.py")
         print("  3. Verify speaker IPs are correct")
         print("  4. Verify Plex token is correct")
         print("  5. Ensure speakers and Plex are on same network")

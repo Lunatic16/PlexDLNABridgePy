@@ -86,7 +86,11 @@ https://plex.tv/library/metadata/12345?X-Plex-Token=abcdef123456789
 
 ### 3. Configure the Script
 
-Edit `plex_dlna_bridge_full.py` and update these configuration values:
+1. Copy `config_template.py` to `config.py`:
+   ```bash
+   cp config_template.py config.py
+   ```
+2. Edit `config.py` and update these configuration values:
 
 ```python
 # --- CONFIGURATION ---
@@ -418,7 +422,7 @@ launchctl load ~/Library/LaunchAgents/com.plexbridge.plist
 
 ### Change DLNA Port
 
-If port 32488 is in use:
+If port 32488 is in use, edit `config.py`:
 ```python
 DLNA_SERVER_PORT = 32489  # Use any available port
 ```
@@ -427,9 +431,9 @@ Remember to update firewall rules for the new port.
 
 ### Enable Debug Logging
 
-Change logging level for more detailed output:
+Change logging level in `config.py` for more detailed output:
 ```python
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+LOG_LEVEL = 'DEBUG'
 ```
 
 ## Technical Details
@@ -437,18 +441,18 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(leve
 ### UPnP/DLNA Architecture
 
 ```
-┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+┌─────────────────┐          ┌──────────────────┐          ┌─────────────────┐
 │   Plex Server   │────────▶│  DLNA Bridge     │────────▶│ Samsung Speakers│
-│                 │  HTTP   │                  │  pywam  │                 │
-│ - Media Library │  SOAP   │ - DLNA Server    │  API    │ - Speaker 1     │
-│ - Transcoding   │  UPnP   │ - Protocol Trans │         │ - Speaker 2     │
-│ - M-SEARCH      │         │ - State Manager  │         │ - Speaker N     │
-└─────────────────┘         │ - SSDP Responder │         └─────────────────┘
-        │                    └──────────────────┘                 │
-        │                            │                            │
-        │                            ▼                            │
-        │                    ┌──────────────┐                    │
-        └───────────────────▶│ SSDP/mDNS    │◀───────────────────┘
+│                 │  HTTP    │                  │  pywam   │                 │
+│ - Media Library │  SOAP    │ - DLNA Server    │  API     │ - Speaker 1     │
+│ - Transcoding   │  UPnP    │ - Protocol Trans │          │ - Speaker 2     │
+│ - M-SEARCH      │          │ - State Manager  │          │ - Speaker N     │
+└─────────────────┘          │ - SSDP Responder │          └─────────────────┘
+        │                    └──────────────────┘                  │
+        │                            │                             │
+        │                            ▼                             │
+        │                    ┌──────────────┐                      │
+        └──────────────────▶│ SSDP/mDNS    │◀────────────────────┘
                              │ Discovery    │
                              │ Port 1900    │
                              └──────────────┘
@@ -522,6 +526,7 @@ Plex will automatically transcode unsupported formats.
 ## Project Files
 
 - **plex_dlna_bridge_full.py** - Main bridge application
+- **config.py** - User configuration file (you create this)
 - **test_connection.py** - Pre-flight connection testing
 - **diagnose_discovery.py** - Discovery diagnostic tool
 - **README.md** - Complete documentation
@@ -557,6 +562,13 @@ This project is provided as-is for personal use. Samsung and Plex are trademarks
 - UPnP/DLNA specifications from upnp.org
 
 ## Changelog
+
+### v1.2.0 (Architecture & Configuration)
+- ✅ **Secure Configuration**: Moved all settings to `config.py` to separate secrets from code.
+- ✅ **Robust Async Architecture**: Implemented persistent background event loop to prevent concurrency crashes.
+- ✅ **Improved Network Stability**: Added multi-interface IP detection for better connectivity.
+- ✅ **Updated Tools**: Connection tester and diagnostic tools now respect `config.py`.
+- ✅ **Dependencies**: Added `netifaces` for robust network detection.
 
 ### v1.1.0 (Discovery Fix)
 - ✅ Added M-SEARCH responder for active discovery

@@ -14,27 +14,28 @@ from dataclasses import dataclass
 from typing import Optional, List
 from enum import Enum
 
+# Import configuration
+try:
+    import config
+except ImportError:
+    # Fallback or create default config if missing (though we just created it)
+    import sys
+    print("Error: config.py not found. Please copy config_template.py to config.py and configure it.")
+    sys.exit(1)
+
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=getattr(logging, config.LOG_LEVEL, logging.INFO), 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION ---
-PLEX_URL = 'http://192.168.1.100:32400'  # Plex Media Server IP Address
-PLEX_TOKEN = 'your_plex_token_here'       # Log into Plex Web App - Click three dots icon on a piece of media - Click Get info - Click "View XML" - Look for X-Plex-Token in the URL
-GROUP_NAME = "Living Room R1 Group"
-DLNA_DEVICE_NAME = "Samsung Speaker Group"
-DLNA_SERVER_PORT = 32488  # Standard port for DLNA services
+# Global Background Loop
+EVENT_LOOP = None
+LOOP_THREAD = None
 
-# Samsung speaker IPs - you'll need to replace these with your actual speaker IPs
-SPEAKER_IPS = [
-    '192.168.1.101',  # Replace with your actual speaker IPs
-    '192.168.1.102',  # Replace with your actual speaker IPs
-    # Add more IPs as needed
-]
-
-# Persistent device UUID (generate once and save)
-DEVICE_UUID = "3c202906-2b86-4f88-a79c-f6d4e7c8d1a3"
-
+def start_background_loop(loop):
+    """Run the asyncio event loop in a background thread."""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
 
 class PlaybackState(Enum):
     """Playback state enumeration"""
@@ -120,13 +121,13 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
   </specVersion>
   <device>
     <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
-    <friendlyName>{DLNA_DEVICE_NAME}</friendlyName>
+    <friendlyName>{config.DLNA_DEVICE_NAME}</friendlyName>
     <manufacturer>Samsung</manufacturer>
     <manufacturerURL>http://www.samsung.com</manufacturerURL>
     <modelDescription>Samsung Multiroom Speaker Group</modelDescription>
     <modelName>Samsung R1 Group</modelName>
     <modelNumber>1.0</modelNumber>
-    <UDN>uuid:{DEVICE_UUID}</UDN>
+    <UDN>uuid:{config.DEVICE_UUID}</UDN>
     <serviceList>
       <service>
         <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
@@ -150,7 +151,7 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
         <eventSubURL>/upnp/event/RenderingControl1</eventSubURL>
       </service>
     </serviceList>
-    <presentationURL>http://{local_ip}:{DLNA_SERVER_PORT}/</presentationURL>
+    <presentationURL>http://{local_ip}:{config.DLNA_SERVER_PORT}/</presentationURL>
   </device>
 </root>'''
         return xml_desc
@@ -278,11 +279,11 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
         """Prepare media for playback (runs in separate thread)"""
         try:
             # Get direct media URL from Plex if needed
-            if 'plex' in uri.lower() or PLEX_URL.replace('http://', '') in uri:
+            if 'plex' in uri.lower() or config.PLEX_URL.replace('http://', '') in uri:
                 # This is a Plex URL, ensure it has the token
                 if 'X-Plex-Token' not in uri:
                     separator = '&' if '?' in uri else '?'
-                    uri = f"{uri}{separator}X-Plex-Token={PLEX_TOKEN}"
+                    uri = f"{uri}{separator}X-Plex-Token={config.PLEX_TOKEN}"
                 
                 self.media_state.current_track_uri = uri
                 logger.info(f"Prepared Plex media URL: {uri}")
@@ -296,7 +297,7 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
         if self.media_state.current_track_uri:
             self.media_state.transport_state = PlaybackState.TRANSITIONING
             
-            # Start playback in separate thread
+            # Start playback in separate thread (which dispatches to async loop)
             threading.Thread(target=self.start_playback, daemon=True).start()
             
             return '''<u:PlayResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
@@ -312,16 +313,21 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
             uri = self.media_state.current_track_uri
             logger.info(f"Starting playback of: {uri}")
             
-            # Run async playback
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Use the persistent background loop
+            future = asyncio.run_coroutine_threadsafe(
+                self.speaker_group.play_url(uri), 
+                self.speaker_group.loop
+            )
+            
+            # Wait for result with timeout
             try:
-                loop.run_until_complete(self.speaker_group.play_url(uri))
+                future.result(timeout=10)
                 self.media_state.transport_state = PlaybackState.PLAYING
                 logger.info("Playback started successfully")
-            finally:
-                loop.close()
-                
+            except Exception as e:
+                logger.error(f"Playback start failed or timed out: {e}")
+                self.media_state.transport_state = PlaybackState.STOPPED
+
         except Exception as e:
             logger.error(f"Error starting playback: {e}", exc_info=True)
             self.media_state.transport_state = PlaybackState.STOPPED
@@ -340,12 +346,11 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
     def pause_playback(self):
         """Pause playback on Samsung speakers"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self.speaker_group.pause())
-            finally:
-                loop.close()
+            future = asyncio.run_coroutine_threadsafe(
+                self.speaker_group.pause(), 
+                self.speaker_group.loop
+            )
+            future.result(timeout=5)
         except Exception as e:
             logger.error(f"Error pausing playback: {e}")
     
@@ -364,12 +369,11 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
     def stop_playback(self):
         """Stop playback on Samsung speakers"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self.speaker_group.stop())
-            finally:
-                loop.close()
+            future = asyncio.run_coroutine_threadsafe(
+                self.speaker_group.stop(), 
+                self.speaker_group.loop
+            )
+            future.result(timeout=5)
         except Exception as e:
             logger.error(f"Error stopping playback: {e}")
     
@@ -414,12 +418,11 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
     def set_speaker_volume(self, volume):
         """Set volume on Samsung speakers"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self.speaker_group.set_volume(volume))
-            finally:
-                loop.close()
+            future = asyncio.run_coroutine_threadsafe(
+                self.speaker_group.set_volume(volume), 
+                self.speaker_group.loop
+            )
+            future.result(timeout=5)
         except Exception as e:
             logger.error(f"Error setting volume: {e}")
     
@@ -519,16 +522,36 @@ class DLNADeviceHandler(BaseHTTPRequestHandler):
     def get_local_ip():
         """Get local IP address"""
         try:
-            return socket.gethostbyname(socket.gethostname())
+            # First try netifaces for best accuracy
+            import netifaces
+            for interface in netifaces.interfaces():
+                if interface == 'lo': continue
+                addrs = netifaces.ifaddresses(interface)
+                if netifaces.AF_INET in addrs:
+                    for addr in addrs[netifaces.AF_INET]:
+                        ip = addr['addr']
+                        if not ip.startswith('127.'):
+                            return ip
+        except ImportError:
+            pass
+            
+        # Fallback to connection attempt
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            return local_ip
         except:
-            return "127.0.0.1"
+            return socket.gethostbyname(socket.gethostname())
 
 
 class SamsungSpeakerGroup:
     """Manages a group of Samsung speakers"""
     
-    def __init__(self, speaker_ips):
+    def __init__(self, speaker_ips, loop):
         self.speaker_ips = speaker_ips
+        self.loop = loop  # Reference to the persistent event loop
         self.devices: List[Speaker] = []
         self.connected = False
         self.master_speaker: Optional[Speaker] = None
@@ -657,7 +680,7 @@ class SamsungSpeakerGroup:
 class DLNABridgeServer:
     """DLNA server that makes the Samsung speaker group discoverable to Plex"""
     
-    def __init__(self, speaker_group, media_state, port=DLNA_SERVER_PORT):
+    def __init__(self, speaker_group, media_state, port=config.DLNA_SERVER_PORT):
         self.speaker_group = speaker_group
         self.media_state = media_state
         self.port = port
@@ -690,29 +713,28 @@ class DLNABridgeServer:
             logger.info("DLNA server stopped")
 
 
-def setup_samsung_group():
+def setup_samsung_group(loop):
     """Discover and group Samsung R1 speakers using pywam"""
     logger.info("Setting up Samsung speaker group...")
     
     # Create the speaker group object
-    speaker_group = SamsungSpeakerGroup(SPEAKER_IPS)
+    speaker_group = SamsungSpeakerGroup(config.SPEAKER_IPS, loop)
     
-    # Connect to all speakers
-    async def connect_speakers():
-        success = await speaker_group.connect_all()
-        return success, speaker_group
+    # Connect to all speakers using thread-safe call
+    future = asyncio.run_coroutine_threadsafe(
+        speaker_group.connect_all(), 
+        loop
+    )
     
-    # Run the async function
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        success, group = loop.run_until_complete(connect_speakers())
-    finally:
-        loop.close()
+        success = future.result(timeout=10)
+    except Exception as e:
+        logger.error(f"Timeout or error connecting to speakers: {e}")
+        success = False
     
     if success:
-        logger.info(f"Successfully connected to {len(group.devices)} Samsung speakers")
-        return group
+        logger.info(f"Successfully connected to {len(speaker_group.devices)} Samsung speakers")
+        return speaker_group
     else:
         logger.warning("Failed to connect to Samsung speakers")
         return None
@@ -721,7 +743,7 @@ def setup_samsung_group():
 def connect_to_plex():
     """Connect to Plex Media Server"""
     try:
-        plex = PlexServer(PLEX_URL, PLEX_TOKEN)
+        plex = PlexServer(config.PLEX_URL, config.PLEX_TOKEN)
         logger.info(f"Connected to Plex: {plex.friendlyName}")
         return plex
     except Exception as e:
@@ -730,19 +752,30 @@ def connect_to_plex():
 
 
 def get_local_ip():
-    """Get the primary local IP address"""
+    """Get local IP address"""
     try:
-        # Create a socket to determine the primary network interface
+        # First try netifaces for best accuracy
+        import netifaces
+        for interface in netifaces.interfaces():
+            if interface == 'lo': continue
+            addrs = netifaces.ifaddresses(interface)
+            if netifaces.AF_INET in addrs:
+                for addr in addrs[netifaces.AF_INET]:
+                    ip = addr['addr']
+                    if not ip.startswith('127.'):
+                        return ip
+    except ImportError:
+        pass
+        
+    # Fallback to connection attempt
+    try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         local_ip = s.getsockname()[0]
         s.close()
         return local_ip
     except:
-        try:
-            return socket.gethostbyname(socket.gethostname())
-        except:
-            return "127.0.0.1"
+        return socket.gethostbyname(socket.gethostname())
 
 
 def announce_dlna_device():
@@ -756,11 +789,11 @@ def announce_dlna_device():
             f"NOTIFY * HTTP/1.1\r\n"
             f"HOST: 239.255.255.250:1900\r\n"
             f"CACHE-CONTROL: max-age=1800\r\n"
-            f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+            f"LOCATION: http://{local_ip}:{config.DLNA_SERVER_PORT}/description.xml\r\n"
             f"NT: upnp:rootdevice\r\n"
             f"NTS: ssdp:alive\r\n"
             f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
-            f"USN: uuid:{DEVICE_UUID}::upnp:rootdevice\r\n"
+            f"USN: uuid:{config.DEVICE_UUID}::upnp:rootdevice\r\n"
             f"\r\n"
         ),
         # Device announcement
@@ -768,11 +801,11 @@ def announce_dlna_device():
             f"NOTIFY * HTTP/1.1\r\n"
             f"HOST: 239.255.255.250:1900\r\n"
             f"CACHE-CONTROL: max-age=1800\r\n"
-            f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+            f"LOCATION: http://{local_ip}:{config.DLNA_SERVER_PORT}/description.xml\r\n"
             f"NT: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
             f"NTS: ssdp:alive\r\n"
             f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
-            f"USN: uuid:{DEVICE_UUID}::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+            f"USN: uuid:{config.DEVICE_UUID}::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
             f"\r\n"
         ),
         # AVTransport service announcement
@@ -780,11 +813,11 @@ def announce_dlna_device():
             f"NOTIFY * HTTP/1.1\r\n"
             f"HOST: 239.255.255.250:1900\r\n"
             f"CACHE-CONTROL: max-age=1800\r\n"
-            f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+            f"LOCATION: http://{local_ip}:{config.DLNA_SERVER_PORT}/description.xml\r\n"
             f"NT: urn:schemas-upnp-org:service:AVTransport:1\r\n"
             f"NTS: ssdp:alive\r\n"
             f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
-            f"USN: uuid:{DEVICE_UUID}::urn:schemas-upnp-org:service:AVTransport:1\r\n"
+            f"USN: uuid:{config.DEVICE_UUID}::urn:schemas-upnp-org:service:AVTransport:1\r\n"
             f"\r\n"
         ),
     ]
@@ -897,10 +930,10 @@ class SSDPResponder:
                 f"HTTP/1.1 200 OK\r\n"
                 f"CACHE-CONTROL: max-age=1800\r\n"
                 f"EXT:\r\n"
-                f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+                f"LOCATION: http://{local_ip}:{config.DLNA_SERVER_PORT}/description.xml\r\n"
                 f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
                 f"ST: upnp:rootdevice\r\n"
-                f"USN: uuid:{DEVICE_UUID}::upnp:rootdevice\r\n"
+                f"USN: uuid:{config.DEVICE_UUID}::upnp:rootdevice\r\n"
                 f"\r\n"
             ),
             # MediaRenderer device
@@ -908,10 +941,10 @@ class SSDPResponder:
                 f"HTTP/1.1 200 OK\r\n"
                 f"CACHE-CONTROL: max-age=1800\r\n"
                 f"EXT:\r\n"
-                f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+                f"LOCATION: http://{local_ip}:{config.DLNA_SERVER_PORT}/description.xml\r\n"
                 f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
                 f"ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
-                f"USN: uuid:{DEVICE_UUID}::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+                f"USN: uuid:{config.DEVICE_UUID}::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
                 f"\r\n"
             ),
             # UUID
@@ -919,10 +952,10 @@ class SSDPResponder:
                 f"HTTP/1.1 200 OK\r\n"
                 f"CACHE-CONTROL: max-age=1800\r\n"
                 f"EXT:\r\n"
-                f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+                f"LOCATION: http://{local_ip}:{config.DLNA_SERVER_PORT}/description.xml\r\n"
                 f"SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
-                f"ST: uuid:{DEVICE_UUID}\r\n"
-                f"USN: uuid:{DEVICE_UUID}\r\n"
+                f"ST: uuid:{config.DEVICE_UUID}\r\n"
+                f"USN: uuid:{config.DEVICE_UUID}\r\n"
                 f"\r\n"
             ),
         ]
@@ -946,17 +979,24 @@ def main():
     logger.info("Starting Plex DLNA Bridge for Samsung Speakers")
     logger.info("=" * 60)
     
+    # 0. Initialize Background Event Loop
+    global EVENT_LOOP, LOOP_THREAD
+    EVENT_LOOP = asyncio.new_event_loop()
+    LOOP_THREAD = threading.Thread(target=start_background_loop, args=(EVENT_LOOP,), daemon=True)
+    LOOP_THREAD.start()
+    logger.info("Background async loop started")
+
     # Create media state tracker
     media_state = MediaState()
     
     # 1. Physical Grouping
-    speaker_group = setup_samsung_group()
+    speaker_group = setup_samsung_group(EVENT_LOOP)
 
     if not speaker_group:
         logger.warning("Failed to set up Samsung speaker group")
         logger.warning("Note: You'll need to configure your Samsung speakers with correct IPs")
         # Create a dummy group to at least provide DLNA server functionality
-        speaker_group = SamsungSpeakerGroup(SPEAKER_IPS)
+        speaker_group = SamsungSpeakerGroup(config.SPEAKER_IPS, EVENT_LOOP)
 
     # 2. Start DLNA server to make group discoverable to Plex
     dlna_server = DLNABridgeServer(speaker_group, media_state)
@@ -980,16 +1020,16 @@ def main():
 
     if plex:
         logger.info("=" * 60)
-        logger.info(f"✓ Samsung speaker group '{GROUP_NAME}' is now discoverable")
-        logger.info(f"✓ Appearing to Plex as '{DLNA_DEVICE_NAME}'")
-        logger.info(f"✓ DLNA server running on port {DLNA_SERVER_PORT}")
+        logger.info(f"✓ Samsung speaker group '{config.GROUP_NAME}' is now discoverable")
+        logger.info(f"✓ Appearing to Plex as '{config.DLNA_DEVICE_NAME}'")
+        logger.info(f"✓ DLNA server running on port {config.DLNA_SERVER_PORT}")
         logger.info(f"✓ SSDP responder active on port 1900")
         logger.info("✓ Ready for playback commands from Plex")
         logger.info("=" * 60)
         logger.info("\nTo use:")
         logger.info("1. Open Plex and start playing media")
         logger.info("2. Click the cast icon")
-        logger.info(f"3. Select '{DLNA_DEVICE_NAME}' from the device list")
+        logger.info(f"3. Select '{config.DLNA_DEVICE_NAME}' from the device list")
         logger.info("4. Media will play through your Samsung speakers")
         logger.info("\nPress Ctrl+C to stop the bridge")
         logger.info("=" * 60)
@@ -1021,17 +1061,16 @@ def main():
         logger.info("Stopped SSDP responder")
         
         if speaker_group and speaker_group.connected:
-            # Clean up async resources
-            async def cleanup():
-                await speaker_group.disconnect_all()
-                
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Clean up async resources using thread-safe call
+            future = asyncio.run_coroutine_threadsafe(
+                speaker_group.disconnect_all(), 
+                EVENT_LOOP
+            )
             try:
-                loop.run_until_complete(cleanup())
+                future.result(timeout=5)
                 logger.info("Disconnected from Samsung speakers")
-            finally:
-                loop.close()
+            except Exception as e:
+                logger.error(f"Error disconnecting: {e}")
         
         dlna_server.stop_server()
         logger.info("Bridge stopped successfully")
