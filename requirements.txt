@@ -6,10 +6,15 @@ pywam>=0.0.8
 # Plex API
 plexapi>=4.13.0
 
-# HTTP requests
+# HTTP requests and Async Server
 requests>=2.28.0
+aiohttp>=3.8.0
 
-# Network Interface Detection (Optional but recommended)
+# Configuration & Environment
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# Network Interface Detection
 netifaces>=0.11.0
 
 # Standard library packages (usually included with Python)

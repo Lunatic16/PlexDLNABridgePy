@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  plex-dlna-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: plex-dlna-bridge
+    container_name: plex-dlna-bridge
+    restart: unless-stopped
+    
+    # CRITICAL: Host networking is required for DLNA/SSDP multicast discovery
+    network_mode: host
+    
+    # Environment variables are loaded from .env file by default
+    # Example values are in .env.example
+    env_file:
+      - .env
+
+    # Expose ports for clarity, though host network mode makes this less critical
+    ports:
+      - "32488:32488/tcp"
+      - "1900:1900/udp"

@@ -18,31 +18,33 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.request
 import xml.etree.ElementTree as ET
+import platform
+import logging
 
-# Configuration
-try:
-    import config
-    DLNA_SERVER_PORT = config.DLNA_SERVER_PORT
-    DEVICE_UUID = config.DEVICE_UUID
-except ImportError:
-    print("⚠️  Warning: config.py not found, using default values")
-    DLNA_SERVER_PORT = 32488
-    DEVICE_UUID = "3c202906-2b86-4f88-a79c-f6d4e7c8d1a3"
+from bridge.config import settings
+
+# Configuration from settings
+DLNA_SERVER_PORT = settings.dlna_server_port
+DEVICE_UUID = settings.device_uuid
+DLNA_DEVICE_NAME = settings.dlna_device_name
 
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
 
+# Set up basic logging for the diagnostic tool
+logging.basicConfig(level=logging.INFO, 
+                    format='%(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 def get_local_ip():
     """Get the primary local IP address"""
     try:
-        # Create a socket to determine the primary network interface
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         local_ip = s.getsockname()[0]
         s.close()
         return local_ip
-    except:
+    except Exception:
         return socket.gethostbyname(socket.gethostname())
 
 
@@ -58,8 +60,11 @@ def get_all_ips():
                     ip = addr['addr']
                     if not ip.startswith('127.'):
                         ips.append(ip)
-    except:
-        # Fallback if netifaces not available
+    except ImportError:
+        logger.warning("netifaces not installed, using basic IP detection.")
+        ips = [get_local_ip()]
+    except Exception as e:
+        logger.error(f"Error getting all IPs: {e}")
         ips = [get_local_ip()]
     return ips
 
@@ -80,7 +85,7 @@ def test_multicast_send():
         f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
         "NT: upnp:rootdevice\r\n"
         "NTS: ssdp:alive\r\n"
-        "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
+        "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/2.0\r\n"
         f"USN: uuid:{DEVICE_UUID}::upnp:rootdevice\r\n"
         "\r\n"
     )
@@ -199,7 +204,7 @@ def respond_to_msearch(sock, addr, request):
         "CACHE-CONTROL: max-age=1800\r\n"
         "EXT:\r\n"
         f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
-        "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/1.0\r\n"
+        "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/2.0\r\n"
         "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
         f"USN: uuid:{DEVICE_UUID}::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
         "\r\n"
@@ -236,7 +241,7 @@ def test_description_xml():
   </specVersion>
   <device>
     <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
-    <friendlyName>Samsung Speaker Group</friendlyName>
+    <friendlyName>{DLNA_DEVICE_NAME}</friendlyName>
     <manufacturer>Samsung</manufacturer>
     <modelName>Samsung R1 Group</modelName>
     <UDN>uuid:{DEVICE_UUID}</UDN>
@@ -327,7 +332,6 @@ def test_firewall():
     print("Firewall Check")
     print("="*60)
     
-    import platform
     system = platform.system()
     
     print(f"Operating System: {system}")

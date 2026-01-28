@@ -26,8 +26,7 @@ A complete DLNA/UPnP bridge that makes Samsung multiroom speakers discoverable a
 - Persistent device UUID
 
 ✅ **Diagnostic Tools**
-- Connection testing script
-- Discovery diagnostic tool
+- Connection testing script (`diagnose_discovery.py`)
 - Comprehensive troubleshooting guides
 - Debug logging support
 
@@ -40,7 +39,7 @@ A complete DLNA/UPnP bridge that makes Samsung multiroom speakers discoverable a
 
 ### Software
 ```bash
-pip install pywam plexapi requests
+pip install -r requirements.txt
 ```
 
 ## Setup Instructions
@@ -84,83 +83,59 @@ https://plex.tv/library/metadata/12345?X-Plex-Token=abcdef123456789
                                         This is your token
 ```
 
-### 3. Configure the Script
+### 3. Configure the Bridge
 
-1. Copy `config_template.py` to `config.py`:
+Configuration is now managed via environment variables, ideally through a `.env` file.
+
+1. Copy `.env.example` to `.env`:
    ```bash
-   cp config_template.py config.py
+   cp .env.example .env
    ```
-2. Edit `config.py` and update these configuration values:
+2. Edit the `.env` file and update these configuration values:
 
-```python
+```ini
 # --- CONFIGURATION ---
-PLEX_URL = 'http://192.168.1.100:32400'  # Your Plex server IP and port
-PLEX_TOKEN = 'your_plex_token_here'      # Token from step 2
-GROUP_NAME = "Living Room R1 Group"      # Friendly name for your group
-DLNA_DEVICE_NAME = "Samsung Speaker Group"  # Name shown in Plex
-DLNA_SERVER_PORT = 32488                 # Port for DLNA server (usually fine as-is)
+PLEX_URL="http://192.168.1.100:32400"  # Your Plex server IP and port
+PLEX_TOKEN="your_plex_token_here"      # Token from step 2
+GROUP_NAME="Living Room Group"         # Friendly name for your group
+DLNA_DEVICE_NAME="Samsung Speaker Bridge" # Name shown in Plex
+DLNA_SERVER_PORT=32488                 # Port for DLNA server (usually fine as-is)
 
-# Your Samsung speaker IPs
-SPEAKER_IPS = [
-    '192.168.1.101',  # Replace with actual IPs from step 1
-    '192.168.1.102',
-    # Add more as needed
-]
+# Your Samsung speaker IPs, comma-separated. Leave empty for auto-discovery.
+SPEAKER_IPS="192.168.1.101,192.168.1.102"
+# Set to True to enable automatic speaker discovery (recommended)
+AUTO_DISCOVER_SPEAKERS=True
+
+LOG_LEVEL="INFO"                       # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 ```
 
 ### 4. Run the Bridge
 
-**First, test your configuration:**
+Ensure you have installed the dependencies: `pip install -r requirements.txt`
+
+**Option A: Python (Direct)**
 ```bash
-python test_connection.py
+python main.py
 ```
 
-This will verify:
-- All dependencies are installed
-- Configuration is valid
-- Speakers are reachable
-- Plex server is accessible
-
-**If tests pass, run the bridge:**
+**Option B: Docker (Recommended)**
+1. Ensure your `.env` file is configured.
+2. Run:
 ```bash
-python plex_dlna_bridge_full.py
+docker-compose up -d --build
 ```
-
-**Note:** On Linux/Mac, you may need elevated privileges for port 1900:
-```bash
-sudo python plex_dlna_bridge_full.py
-```
-
-You should see:
-```
-============================================================
-Starting Plex DLNA Bridge for Samsung Speakers
-============================================================
-INFO - Connected to speaker at 192.168.1.101
-INFO - Connected to speaker at 192.168.1.102
-INFO - Successfully connected to 2 Samsung speakers
-INFO - DLNA server started on port 32488
-INFO - SSDP responder listening for M-SEARCH requests
-INFO - Connected to Plex: My Plex Server
-============================================================
-✓ Samsung speaker group 'Living Room R1 Group' is now discoverable
-✓ Appearing to Plex as 'Samsung Speaker Group'
-✓ DLNA server running on port 32488
-✓ SSDP responder active on port 1900
-✓ Ready for playback commands from Plex
-============================================================
-```
+*Note: Docker requires `network_mode: host` for DLNA discovery to work, which is configured in `docker-compose.yml`.*
 
 ### 5. Use with Plex
 
 1. Open Plex (web, mobile, or desktop app)
 2. Start playing any audio track
 3. Click the **Cast** icon (📡) in the player controls
-4. Select **"Samsung Speaker Group"** from the device list
+4. Select **"Samsung Speaker Bridge"** (or whatever you set `DLNA_DEVICE_NAME` to) from the device list
 5. Music will now play through your Samsung speakers!
 
 **⚠️ If device doesn't appear in Plex:**
-This is the most common issue. The device may not be discoverable due to firewall or network configuration. See the **Troubleshooting** section below, or run:
+This is the most common issue. The device may not be discoverable due to firewall or network configuration. See the **Troubleshooting** section below, or run the diagnostic tool:
 ```bash
 python diagnose_discovery.py
 ```
@@ -177,10 +152,10 @@ Failed to connect to speaker at 192.168.1.101
 ```
 
 **Solutions:**
-1. Verify speaker IPs are correct
+1. Verify speaker IPs are correct in `.env` or if auto-discovery is enabled, check network connectivity.
    ```bash
-   ping 192.168.1.101
-   ```
+ping 192.168.1.101
+```
 2. Ensure speakers are powered on and connected to WiFi
 3. Check that you're on the same network as the speakers
 4. Try resetting the speakers (hold power button for 10 seconds)
@@ -213,8 +188,8 @@ This will test:
    sudo ufw allow 32488/tcp comment 'DLNA HTTP'
    sudo ufw allow 1900/udp comment 'SSDP Discovery'
    
-   # Run bridge with sudo for port 1900 access
-   sudo python plex_dlna_bridge_full.py
+   # Run bridge with sudo for port 1900 access if binding to low port
+   # Not typically needed with DLNA_SERVER_PORT=32488
    ```
 
 2. **Different network subnets**
@@ -228,29 +203,26 @@ This will test:
    - Check for AP/Client Isolation (should be DISABLED)
 
 4. **Permission denied on port 1900**
-   ```bash
-   # Port 1900 needs elevated privileges on most systems
-   sudo python plex_dlna_bridge_full.py
-   ```
+   - Port 1900 requires elevated privileges on some systems. If you encounter issues, ensure `main.py` has necessary permissions or run with `sudo` if absolutely required (e.g., `sudo python main.py`).
 
 **Step-by-Step Solutions:**
 See the detailed guide: **DISCOVERY_TROUBLESHOOTING.md**
 
 **Quick Fixes:**
 ```bash
-# 1. Stop the bridge (Ctrl+C)
+# 1. Stop the bridge (Ctrl+C or docker-compose down)
 
 # 2. Restart Plex Media Server
 # Linux: sudo systemctl restart plexmediaserver
 # Windows: Services → Plex Media Server → Restart
 # macOS: System Preferences → Plex → Restart
 
-# 3. Open firewall ports
+# 3. Open firewall ports (if not already open)
 sudo ufw allow 32488/tcp
 sudo ufw allow 1900/udp
 
-# 4. Run bridge with elevated privileges
-sudo python plex_dlna_bridge_full.py
+# 4. Run bridge (with elevated privileges if port 1900 binding fails)
+python main.py # or docker-compose up -d
 
 # 5. Wait 30 seconds, then refresh Plex client
 
@@ -261,14 +233,13 @@ sudo python plex_dlna_bridge_full.py
 **Verification:**
 When working correctly, you should see in the logs:
 ```
-✓ DLNA server running on port 32488
-✓ SSDP responder active on port 1900
-✓ Ready for playback commands from Plex
+INFO - DLNA Server started on port 32488
+INFO - Bridge is fully operational
 ```
 
 And when Plex searches for devices:
 ```
-DEBUG - Received M-SEARCH from 192.168.1.100, responding...
+DEBUG - Responding to M-SEARCH from (...)
 ```
 
 If you don't see M-SEARCH requests, the issue is network/firewall related.
@@ -281,9 +252,9 @@ Failed to connect to Plex: 401 Client Error: Unauthorized
 ```
 
 **Solutions:**
-1. Verify token is correct (no extra spaces or characters)
-2. Token may have expired - get a fresh token
-3. Ensure Plex server URL is correct
+1. Verify token is correct in `.env` (no extra spaces or characters)
+2. Token may have expired - get a fresh token from Plex
+3. Ensure Plex server URL in `.env` is correct
 4. Check that Plex server is running
 
 ### Problem: Media plays but no audio
@@ -294,7 +265,7 @@ Failed to connect to Plex: 401 Client Error: Unauthorized
 - Bridge logs show "Playback started successfully"
 
 **Solutions:**
-1. Check speaker volume isn't muted or set to 0
+1. Check speaker volume isn't muted or set to 0 via the Samsung Multiroom app or Plex client.
 2. Verify audio format is supported:
    - Samsung speakers support: MP3, AAC, FLAC, WAV
    - Check Plex transcoding settings
@@ -312,7 +283,7 @@ Failed to connect to Plex: 401 Client Error: Unauthorized
 1. Create a speaker group in Samsung Multiroom app first
 2. Ensure all speakers are on the same network
 3. Update all speaker firmware to the same version
-4. Check that all speakers are added to `SPEAKER_IPS`
+4. Check that all speakers are added to `SPEAKER_IPS` in your `.env` file or are discoverable.
 
 ### Problem: Script crashes with async errors
 
@@ -323,17 +294,19 @@ asyncio.exceptions.InvalidStateError
 ```
 
 **Solutions:**
-1. Update Python to 3.7 or newer:
+1. Update Python to 3.8 or newer:
    ```bash
-   python --version  # Should be 3.7+
+   python --version  # Should be 3.8+
    ```
-2. Update pywam library:
+2. Update pywam library and other dependencies:
    ```bash
-   pip install --upgrade pywam
+   pip install --upgrade -r requirements.txt
    ```
-3. Check for conflicting async libraries
+3. Ensure no conflicting async libraries are running.
 
 ## Advanced Configuration
+
+Configuration is primarily handled via the `.env` file. Refer to `bridge/config.py` for default values and available settings.
 
 ### Run as a System Service (Linux)
 
@@ -343,7 +316,7 @@ Create a systemd service file:
 sudo nano /etc/systemd/system/plex-dlna-bridge.service
 ```
 
-Add this content:
+Add this content (update `User`, `WorkingDirectory`, and `ExecStart` paths):
 ```ini
 [Unit]
 Description=Plex DLNA Bridge for Samsung Speakers
@@ -352,10 +325,11 @@ After=network.target
 [Service]
 Type=simple
 User=your_username
-WorkingDirectory=/home/your_username/plex-bridge
-ExecStart=/usr/bin/python3 /home/your_username/plex-bridge/plex_dlna_bridge_full.py
+WorkingDirectory=/home/your_username/PlexDLNABridgePy
+ExecStart=/usr/bin/python3 /home/your_username/PlexDLNABridgePy/main.py
 Restart=always
 RestartSec=10
+EnvironmentFile=/home/your_username/PlexDLNABridgePy/.env
 
 [Install]
 WantedBy=multi-user.target
@@ -376,13 +350,14 @@ sudo journalctl -u plex-dlna-bridge -f
 
 ### Run on Startup (Windows)
 
-1. Create a batch file `start_bridge.bat`:
+1. Create a batch file `start_bridge.bat` in your project root:
 ```batch
 @echo off
-cd C:\path\to\plex-bridge
-python plex_dlna_bridge_full.py
+cd "C:\path\to\PlexDLNABridgePy"
+"C:\path\to\python.exe" main.py
 pause
 ```
+   *(Update paths to match your Python installation and project directory)*
 
 2. Press `Win+R`, type `shell:startup`, press Enter
 3. Create a shortcut to `start_bridge.bat` in the Startup folder
@@ -394,7 +369,7 @@ Create a LaunchAgent plist:
 nano ~/Library/LaunchAgents/com.plexbridge.plist
 ```
 
-Add this content:
+Add this content (update `/path/to/python3` and `/path/to/PlexDLNABridgePy/main.py`):
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -405,12 +380,19 @@ Add this content:
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/path/to/plex_dlna_bridge_full.py</string>
+        <string>/path/to/PlexDLNABridgePy/main.py</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>WorkingDirectory</key>
+    <string>/path/to/PlexDLNABridgePy</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
 </dict>
 </plist>
 ```
@@ -420,33 +402,30 @@ Load it:
 launchctl load ~/Library/LaunchAgents/com.plexbridge.plist
 ```
 
-### Change DLNA Port
+## Testing
 
-If port 32488 is in use, edit `config.py`:
-```python
-DLNA_SERVER_PORT = 32489  # Use any available port
-```
+To run the basic test suite:
 
-Remember to update firewall rules for the new port.
-
-### Enable Debug Logging
-
-Change logging level in `config.py` for more detailed output:
-```python
-LOG_LEVEL = 'DEBUG'
-```
+1. Install `pytest` if you haven't already:
+   ```bash
+   pip install pytest pytest-asyncio
+   ```
+2. Run tests from the project root:
+   ```bash
+   pytest tests/
+   ```
 
 ## Technical Details
 
-### UPnP/DLNA Architecture
+### UPnP/DLNA Architecture (Updated)
 
 ```
 ┌─────────────────┐          ┌──────────────────┐          ┌─────────────────┐
 │   Plex Server   │────────▶│  DLNA Bridge     │────────▶│ Samsung Speakers│
 │                 │  HTTP    │                  │  pywam   │                 │
-│ - Media Library │  SOAP    │ - DLNA Server    │  API     │ - Speaker 1     │
-│ - Transcoding   │  UPnP    │ - Protocol Trans │          │ - Speaker 2     │
-│ - M-SEARCH      │          │ - State Manager  │          │ - Speaker N     │
+│ - Media Library │  SOAP    │ - aiohttp Server │  API     │ - Speaker 1     │
+│ - Transcoding   │  UPnP    │ - Media State    │          │ - Speaker 2     │
+│ - M-SEARCH      │          │ - Speaker Mgr    │          │ - Speaker N     │
 └─────────────────┘          │ - SSDP Responder │          └─────────────────┘
         │                    └──────────────────┘                  │
         │                            │                             │
@@ -463,17 +442,15 @@ LOG_LEVEL = 'DEBUG'
 The bridge uses a two-pronged approach for device discovery:
 
 1. **SSDP NOTIFY (Passive)**
-   - Broadcasts device presence every 5 minutes
-   - Announces on multicast address 239.255.255.250:1900
+   - Broadcasts device presence periodically on multicast address 239.255.255.250:1900
    - Includes device location URL
 
-2. **M-SEARCH Response (Active)** ⭐ NEW
+2. **M-SEARCH Response (Active)**
    - Listens for discovery requests on port 1900
    - Responds immediately when Plex searches
-   - Significantly faster discovery
-   - More reliable than passive announcements
+   - Significantly faster and more reliable discovery
 
-This dual approach ensures maximum compatibility with all Plex clients.
+This dual approach ensures maximum compatibility with all Plex clients, now powered by an `aiohttp` based asynchronous server.
 
 ### Supported UPnP Actions
 
@@ -483,16 +460,14 @@ This dual approach ensures maximum compatibility with all Plex clients.
 - `Pause` - Pause playback
 - `Stop` - Stop playback
 - `GetTransportInfo` - Get playback state
-- `GetPositionInfo` - Get current position
 
 **RenderingControl Service:**
 - `SetVolume` - Set volume level (0-100)
 - `GetVolume` - Get current volume
-- `SetMute` - Mute/unmute
-- `GetMute` - Get mute state
+- (Mute functionality is planned for future updates)
 
 **ConnectionManager Service:**
-- `GetProtocolInfo` - Get supported protocols
+- (Basic `GetProtocolInfo` for compatibility)
 
 ### Supported Audio Formats
 
@@ -519,36 +494,42 @@ Plex will automatically transcode unsupported formats.
 
 ## Security Notes
 
-- The Plex token provides full access to your Plex server - keep it secure
-- The DLNA bridge listens on 0.0.0.0 (all interfaces) - use firewall rules if on public network
-- Consider running on a dedicated machine or container for isolation
+- The Plex token provides full access to your Plex server - keep it secure and never commit it to version control.
+- The DLNA bridge listens on 0.0.0.0 (all interfaces) - use firewall rules if on a public network or if running in a non-isolated environment.
+- Consider running on a dedicated machine or container for isolation.
 
-## Project Files
+## Project Files (New Structure)
 
-- **plex_dlna_bridge_full.py** - Main bridge application
-- **config.py** - User configuration file (you create this)
-- **test_connection.py** - Pre-flight connection testing
-- **diagnose_discovery.py** - Discovery diagnostic tool
-- **README.md** - Complete documentation
-- **QUICKSTART.md** - 5-minute setup guide
-- **DISCOVERY_TROUBLESHOOTING.md** - Detailed discovery troubleshooting
-- **requirements.txt** - Python dependencies
-- **config_template.py** - Configuration template
+- **`main.py`** - The main entry point for the application.
+- **`bridge/config.py`** - Configuration loaded via `pydantic-settings` from `.env`.
+- **`bridge/core/dlna_server.py`** - Implements the asynchronous DLNA/UPnP HTTP server using `aiohttp`.
+- **`bridge/core/models.py`** - Data models for playback state and media information.
+- **`bridge/core/speaker_manager.py`** - Manages connections and controls for Samsung speakers via `pywam`.
+- **`bridge/core/ssdp.py`** - Handles SSDP announcements and M-SEARCH responses.
+- **`diagnose_discovery.py`** - Standalone diagnostic tool to troubleshoot discovery issues.
+- **`requirements.txt`** - Python dependencies.
+- **`.env.example`** - Template for environment-based configuration.
+- **`Dockerfile`** - Docker multi-stage build definition.
+- **`docker-compose.yml`** - Docker Compose setup for easy deployment.
+- **`tests/`** - Directory containing unit and integration tests.
+  - **`tests/test_bridge.py`** - Basic test suite.
+- **`README.md`** - This documentation.
+- **`QUICKSTART.md`** - 5-minute setup guide (will be updated separately if needed).
+- **`DISCOVERY_TROUBLESHOOTING.md`** - Detailed discovery troubleshooting guide.
 
 ## Known Limitations
 
-1. **Video Playback:** Only audio is supported (Samsung speakers are audio-only)
-2. **Seeking:** Seek/skip functionality depends on pywam library support
-3. **Multi-Zone:** Each speaker group needs a separate bridge instance
-4. **Discovery Timing:** May take 30-60 seconds for Plex to discover device after starting
-5. **Port 1900:** Requires elevated privileges on most systems (use sudo)
+1. **Video Playback:** Only audio is supported (Samsung speakers are audio-only).
+2. **Seeking:** Seek/skip functionality depends on `pywam` library support.
+3. **Multi-Zone:** Each speaker group needs a separate bridge instance.
+4. **Discovery Timing:** May still take some seconds for Plex to discover the device after starting.
 
 ## Contributing
 
 Found a bug? Have a feature request? Want to improve the code?
 
-1. Test thoroughly with your setup
-2. Document any changes clearly
+1. Test thoroughly with your setup.
+2. Document any changes clearly.
 3. Share your improvements!
 
 ## License
@@ -557,11 +538,27 @@ This project is provided as-is for personal use. Samsung and Plex are trademarks
 
 ## Credits
 
-- **pywam** - Samsung Wireless Audio Multiroom Python library
-- **plexapi** - Python bindings for Plex API
+- **`pywam`** - Samsung Wireless Audio Multiroom Python library
+- **`plexapi`** - Python bindings for Plex API
 - UPnP/DLNA specifications from upnp.org
+- **`aiohttp`** - Asynchronous HTTP client/server framework
+- **`pydantic-settings`** - Settings management using Pydantic
 
 ## Changelog
+
+### v2.0.0 (Major Refactor & Modernization)
+- ✅ **Modular Architecture**: Complete refactor into `bridge/core` modules for `DLNAServer`, `SpeakerManager`, `SSDPResponder`, and `models`.
+- ✅ **Asynchronous Server**: Replaced `http.server` with `aiohttp` for a fully asynchronous and non-blocking web server.
+- ✅ **Modern Configuration**: Switched to `pydantic-settings` for robust environment variable (`.env`) based configuration.
+- ✅ **Improved Speaker Discovery**: Added support for automatic speaker discovery (configurable).
+- ✅ **Comprehensive Testing**: Introduced a `tests/` directory with `pytest` for unit and integration testing.
+- ✅ **Optimized Docker**: Implemented multi-stage Docker builds for smaller images and added a Docker healthcheck.
+- ✅ **Updated Diagnostics**: `diagnose_discovery.py` now uses the new configuration system.
+- Removed deprecated `plex_dlna_bridge_full.py`, `config.py`, and `config_template.py`.
+
+### v1.3.0 (Docker Support)
+- ✅ **Dockerized**: Added `Dockerfile` and `docker-compose.yml` for easy deployment.
+- ✅ **Environment Variables**: Configuration can now be set via Environment Variables for better security.
 
 ### v1.2.0 (Architecture & Configuration)
 - ✅ **Secure Configuration**: Moved all settings to `config.py` to separate secrets from code.
@@ -594,4 +591,3 @@ This project is provided as-is for personal use. Samsung and Plex are trademarks
 ---
 
 **Enjoy your Samsung speakers with Plex! 🎵**
-# PlexDLNABridgePy
