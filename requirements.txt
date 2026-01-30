@@ -1,7 +1,7 @@
 # Plex DLNA Bridge Requirements
 
 # Samsung speaker control
-pywam>=0.0.8
+pywam==0.1.0rc6
 
 # Plex API
 plexapi>=4.13.0
