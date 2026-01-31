@@ -20,14 +20,16 @@ from plexapi.server import PlexServer
 
 # Import configuration from config.py
 try:
-    from config import (
-        PLEX_URL, PLEX_TOKEN, SPEAKER_IPS, 
-        DLNA_SERVER_PORT, DLNA_DEVICE_NAME
-    )
+    from bridge.config import settings
+
+    PLEX_URL = settings.plex_url
+    PLEX_TOKEN = settings.plex_token
+    SPEAKER_IPS = settings.speaker_ips
+    DLNA_SERVER_PORT = settings.dlna_server_port
+    DLNA_DEVICE_NAME = settings.dlna_device_name
 except ImportError:
-    print("❌ Error: Could not import configuration from config.py")
-    print("   Make sure the file exists in the same directory.")
-    print("   If missing, copy config_template.py to config.py and configure it.")
+    print("❌ Error: Could not import configuration from bridge.config")
+    print("   Make sure dependencies are installed and bridge/config.py exists.")
     sys.exit(1)
 
 # Try to import pywam
@@ -326,7 +328,7 @@ def main():
         print("⚠️  Some tests failed. Please fix the issues above.")
         print("\nCommon fixes:")
         print("  1. Install missing dependencies: pip install pywam plexapi requests")
-        print("  2. Check your configuration in config.py")
+        print("  2. Check your configuration in .env")
         print("  3. Verify speaker IPs are correct")
         print("  4. Verify Plex token is correct")
         print("  5. Ensure speakers and Plex are on same network")

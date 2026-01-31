@@ -1,0 +1,8 @@
+2026-01-30 21:52:00,918 - bridge - INFO - Starting Bridge on 192.168.1.18
+2026-01-30 21:52:00,922 - bridge.core.speaker_manager - INFO - Connected to speaker at 192.168.1.102
+2026-01-30 21:52:00,922 - bridge.core.speaker_manager - INFO - Connected to speaker at 192.168.1.101
+2026-01-30 21:52:00,924 - bridge.core.dlna_server - INFO - DLNA Server started on port 32488
+2026-01-30 21:52:00,924 - bridge.core.ssdp - INFO - SSDP bound to interface 192.168.1.18
+2026-01-30 21:52:00,925 - bridge.core.ssdp - INFO - SSDP Responder started on 239.255.255.250:1900
+2026-01-30 21:52:00,925 - bridge - INFO - Bridge is fully operational
+2026-01-30 21:52:00,925 - bridge.core.ssdp - DEBUG - Sending periodic SSDP NOTIFY

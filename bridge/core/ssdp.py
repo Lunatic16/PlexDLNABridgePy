@@ -2,6 +2,7 @@ import asyncio
 import socket
 import logging
 import struct
+from email.utils import formatdate
 from bridge.config import settings
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class SSDPResponder:
         self.protocol = None
 
     def _get_notify_message(self):
+        date_str = formatdate(timeval=None, localtime=False, usegmt=True)
         return (
             "NOTIFY * HTTP/1.1\r\n"
             f"HOST: {SSDP_ADDR}:{SSDP_PORT}\r\n"
@@ -41,19 +43,38 @@ class SSDPResponder:
             "NT: upnp:rootdevice\r\n"
             "NTS: ssdp:alive\r\n"
             "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/2.0\r\n"
+            "X-DLNADOC: DMR-1.50\r\n"
             f"USN: uuid:{settings.device_uuid}::upnp:rootdevice\r\n"
+            f"DATE: {date_str}\r\n"
+            "BOOTID.UPNP.ORG: 1\r\n"
+            "CONFIGID.UPNP.ORG: 1\r\n"
             "\r\n"
         )
 
-    def _get_msearch_response(self):
+    def _get_response(self, st):
+        date_str = formatdate(timeval=None, localtime=False, usegmt=True)
+        
+        if st == 'upnp:rootdevice':
+            usn = f"uuid:{settings.device_uuid}::upnp:rootdevice"
+        elif st == 'urn:schemas-upnp-org:device:MediaRenderer:1':
+            usn = f"uuid:{settings.device_uuid}::urn:schemas-upnp-org:device:MediaRenderer:1"
+        elif st == f"uuid:{settings.device_uuid}":
+            usn = f"uuid:{settings.device_uuid}"
+        else:
+            usn = f"uuid:{settings.device_uuid}::{st}"
+
         return (
             "HTTP/1.1 200 OK\r\n"
             "CACHE-CONTROL: max-age=1800\r\n"
             "EXT:\r\n"
             f"LOCATION: http://{self.local_ip}:{self.port}/description.xml\r\n"
             "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/2.0\r\n"
-            "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
-            f"USN: uuid:{settings.device_uuid}::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
+            "X-DLNADOC: DMR-1.50\r\n"
+            f"ST: {st}\r\n"
+            f"USN: {usn}\r\n"
+            f"DATE: {date_str}\r\n"
+            "BOOTID.UPNP.ORG: 1\r\n"
+            "CONFIGID.UPNP.ORG: 1\r\n"
             "\r\n"
         )
 
@@ -70,11 +91,27 @@ class SSDPResponder:
         except AttributeError:
             pass
 
+        # Set TTL for multicast to ensure it reaches other devices
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+
         sock.bind(('', SSDP_PORT))
 
         # Join multicast group
-        mreq = struct.pack("4sl", socket.inet_aton(SSDP_ADDR), socket.INADDR_ANY)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        # Try to join on the specific interface if possible
+        try:
+            if self.local_ip and self.local_ip != '127.0.0.1':
+                # Join on specific interface
+                mreq = struct.pack("4s4s", socket.inet_aton(SSDP_ADDR), socket.inet_aton(self.local_ip))
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                logger.info(f"SSDP bound to interface {self.local_ip}")
+            else:
+                # Fallback to default
+                mreq = struct.pack("4sl", socket.inet_aton(SSDP_ADDR), socket.INADDR_ANY)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        except Exception as e:
+            logger.warning(f"Failed to bind multicast to specific interface: {e}. Falling back to default.")
+            mreq = struct.pack("4sl", socket.inet_aton(SSDP_ADDR), socket.INADDR_ANY)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
         # Start transport
         self.transport, self.protocol = await loop.create_datagram_endpoint(
@@ -88,17 +125,32 @@ class SSDPResponder:
         asyncio.create_task(self._periodic_notify())
 
     def handle_msearch(self, message, addr):
-        # Should we respond to this?
-        should_respond = any(st in message for st in [
-            'ssdp:all',
-            'upnp:rootdevice', 
-            'MediaRenderer',
-            'urn:schemas-upnp-org:device:MediaRenderer:1'
-        ])
+        # Extract ST header
+        st_header = None
+        for line in message.splitlines():
+            if line.upper().startswith('ST:'):
+                st_header = line[3:].strip()
+                break
         
-        if should_respond:
+        if not st_header:
+            return
+
+        # Responses to send
+        responses = []
+        
+        if st_header == 'ssdp:all':
+            responses.append(self._get_response('upnp:rootdevice'))
+            responses.append(self._get_response(f"uuid:{settings.device_uuid}"))
+            responses.append(self._get_response('urn:schemas-upnp-org:device:MediaRenderer:1'))
+        elif st_header == 'upnp:rootdevice':
+            responses.append(self._get_response('upnp:rootdevice'))
+        elif st_header == f"uuid:{settings.device_uuid}":
+            responses.append(self._get_response(f"uuid:{settings.device_uuid}"))
+        elif 'MediaRenderer' in st_header:
+            responses.append(self._get_response('urn:schemas-upnp-org:device:MediaRenderer:1'))
+        
+        for response in responses:
             logger.debug(f"Responding to M-SEARCH from {addr}")
-            response = self._get_msearch_response()
             self.transport.sendto(response.encode('utf-8'), addr)
 
     async def _periodic_notify(self):
@@ -107,12 +159,18 @@ class SSDPResponder:
                 logger.debug("Sending periodic SSDP NOTIFY")
                 message = self._get_notify_message()
                 
-                # Send to multicast group
-                # We need a separate socket for sending multicast or just use the existing one?
-                # Usually sending to multicast address works on the same socket if configured
-                self.transport.sendto(message.encode('utf-8'), (SSDP_ADDR, SSDP_PORT))
+                # Use a fresh socket for sending NOTIFY to ensure correct interface binding
+                # This matches the behavior of the working diagnostic tool
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as sock:
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+                    if self.local_ip and self.local_ip != '127.0.0.1':
+                        try:
+                            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(self.local_ip))
+                        except Exception:
+                            pass
+                    sock.sendto(message.encode('utf-8'), (SSDP_ADDR, SSDP_PORT))
                 
             except Exception as e:
                 logger.error(f"Error sending SSDP NOTIFY: {e}")
             
-            await asyncio.sleep(600) # Every 10 minutes
+            await asyncio.sleep(60) # Every 60 seconds

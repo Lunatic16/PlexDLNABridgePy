@@ -27,6 +27,7 @@ A complete DLNA/UPnP bridge that makes Samsung multiroom speakers discoverable a
 
 ✅ **Diagnostic Tools**
 - Connection testing script (`diagnose_discovery.py`)
+- API verification script (`verify_discovery_api.py`)
 - Comprehensive troubleshooting guides
 - Debug logging support
 

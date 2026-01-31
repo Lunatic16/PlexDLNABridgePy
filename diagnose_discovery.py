@@ -20,6 +20,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import platform
 import logging
+from email.utils import formatdate
 
 from bridge.config import settings
 
@@ -69,14 +70,16 @@ def get_all_ips():
     return ips
 
 
-def test_multicast_send():
+def test_multicast_send(silent=False):
     """Test if we can send SSDP multicast messages"""
-    print("\n" + "="*60)
-    print("Testing SSDP Multicast Send")
-    print("="*60)
+    if not silent:
+        print("\n" + "="*60)
+        print("Testing SSDP Multicast Send")
+        print("="*60)
     
     local_ip = get_local_ip()
-    print(f"Local IP: {local_ip}")
+    if not silent:
+        print(f"Local IP: {local_ip}")
     
     message = (
         "NOTIFY * HTTP/1.1\r\n"
@@ -87,6 +90,8 @@ def test_multicast_send():
         "NTS: ssdp:alive\r\n"
         "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/2.0\r\n"
         f"USN: uuid:{DEVICE_UUID}::upnp:rootdevice\r\n"
+        "BOOTID.UPNP.ORG: 1\r\n"
+        "CONFIGID.UPNP.ORG: 1\r\n"
         "\r\n"
     )
     
@@ -98,18 +103,22 @@ def test_multicast_send():
         # Try binding to specific interface
         try:
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(local_ip))
-            print(f"✅ Bound to interface: {local_ip}")
+            if not silent:
+                print(f"✅ Bound to interface: {local_ip}")
         except Exception as e:
-            print(f"⚠️  Could not bind to specific interface: {e}")
+            if not silent:
+                print(f"⚠️  Could not bind to specific interface: {e}")
         
         sock.sendto(message.encode('utf-8'), (SSDP_ADDR, SSDP_PORT))
-        print(f"✅ Sent SSDP NOTIFY to {SSDP_ADDR}:{SSDP_PORT}")
-        print(f"   Location: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml")
+        if not silent:
+            print(f"✅ Sent SSDP NOTIFY to {SSDP_ADDR}:{SSDP_PORT}")
+            print(f"   Location: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml")
         
         sock.close()
         return True
     except Exception as e:
-        print(f"❌ Failed to send SSDP multicast: {e}")
+        if not silent:
+            print(f"❌ Failed to send SSDP multicast: {e}")
         return False
 
 
@@ -120,6 +129,15 @@ def listen_for_msearch(duration=30):
     print("="*60)
     print("Waiting for Plex or other devices to search for DLNA devices...")
     print("(Open Plex and try to cast something now)")
+    
+    # Start background NOTIFY loop to force discovery
+    stop_notify = threading.Event()
+    def notify_loop():
+        while not stop_notify.is_set():
+            test_multicast_send(silent=True)
+            time.sleep(5)
+    threading.Thread(target=notify_loop, daemon=True).start()
+    print("   ℹ️  Broadcasting NOTIFY signals every 5s to force discovery...")
     
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -133,6 +151,7 @@ def listen_for_msearch(duration=30):
     except Exception as e:
         print(f"❌ Failed to join multicast group: {e}")
         print("   This is often caused by firewall blocking multicast")
+        stop_notify.set()
         return False
     
     sock.settimeout(1)
@@ -178,6 +197,7 @@ def listen_for_msearch(duration=30):
             print(f"❌ Error receiving: {e}")
     
     sock.close()
+    stop_notify.set()
     
     print(f"\n{'='*60}")
     print(f"Received {request_count} M-SEARCH requests in {duration}s")
@@ -198,23 +218,54 @@ def listen_for_msearch(duration=30):
 def respond_to_msearch(sock, addr, request):
     """Respond to an M-SEARCH request"""
     local_ip = get_local_ip()
+    date_str = formatdate(timeval=None, localtime=False, usegmt=True)
     
-    response = (
-        "HTTP/1.1 200 OK\r\n"
-        "CACHE-CONTROL: max-age=1800\r\n"
-        "EXT:\r\n"
-        f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
-        "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/2.0\r\n"
-        "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
-        f"USN: uuid:{DEVICE_UUID}::urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
-        "\r\n"
-    )
-    
-    try:
-        sock.sendto(response.encode('utf-8'), addr)
-        print(f"   📤 Sent response to {addr[0]}:{addr[1]}")
-    except Exception as e:
-        print(f"   ❌ Failed to send response: {e}")
+    # Determine what to respond with
+    st_header = "ssdp:all"
+    for line in request.splitlines():
+        if line.upper().startswith('ST:'):
+            st_header = line.split(':', 1)[1].strip()
+            break
+            
+    # Targets to respond for
+    targets = []
+    if st_header == "ssdp:all":
+        targets = [
+            "upnp:rootdevice",
+            f"uuid:{DEVICE_UUID}",
+            "urn:schemas-upnp-org:device:MediaRenderer:1"
+        ]
+    elif any(x in st_header for x in ["upnp:rootdevice", f"uuid:{DEVICE_UUID}", "MediaRenderer"]):
+        targets = [st_header]
+    else:
+        targets = ["urn:schemas-upnp-org:device:MediaRenderer:1"]
+
+    for target in targets:
+        usn = f"uuid:{DEVICE_UUID}"
+        if target != usn:
+            usn += f"::{target}"
+
+        response = (
+            "HTTP/1.1 200 OK\r\n"
+            "CACHE-CONTROL: max-age=1800\r\n"
+            f"DATE: {date_str}\r\n"
+            "EXT:\r\n"
+            f"LOCATION: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml\r\n"
+            "SERVER: Linux/4.0 UPnP/1.1 Samsung-DLNA-Bridge/2.0\r\n"
+            f"ST: {target}\r\n"
+            f"USN: {usn}\r\n"
+            "BOOTID.UPNP.ORG: 1\r\n"
+            "CONFIGID.UPNP.ORG: 1\r\n"
+            "\r\n"
+        )
+        
+        try:
+            sock.sendto(response.encode('utf-8'), addr)
+            print(f"   📤 Sent response to {addr[0]}:{addr[1]} for {target}")
+            print(f"      Location: http://{local_ip}:{DLNA_SERVER_PORT}/description.xml")
+            print(f"      (Included BOOTID.UPNP.ORG header)")
+        except Exception as e:
+            print(f"   ❌ Failed to send response: {e}")
 
 
 def test_description_xml():
@@ -228,10 +279,16 @@ def test_description_xml():
     
     print(f"Testing: {url}")
     
+    if local_ip.startswith("127."):
+        print("⚠️  WARNING: Local IP is loopback (127.x.x.x).")
+        print("   Plex will NOT be able to connect to this if it is on another device.")
+        print("   Check your network connection.")
+    
     try:
         # Start a simple HTTP server
         class SimpleHandler(BaseHTTPRequestHandler):
             def do_GET(self):
+                print(f"   📨 HTTP GET request from {self.client_address[0]}: {self.path}")
                 if self.path == '/description.xml':
                     xml = f'''<?xml version="1.0" encoding="utf-8"?>
 <root xmlns="urn:schemas-upnp-org:device-1-0">
@@ -241,16 +298,44 @@ def test_description_xml():
   </specVersion>
   <device>
     <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
-    <friendlyName>{DLNA_DEVICE_NAME}</friendlyName>
+    <friendlyName>{DLNA_DEVICE_NAME} (Diagnostic)</friendlyName>
     <manufacturer>Samsung</manufacturer>
     <modelName>Samsung R1 Group</modelName>
     <UDN>uuid:{DEVICE_UUID}</UDN>
+    <serviceList>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:AVTransport</serviceId>
+        <SCPDURL>/AVTransport/scpd.xml</SCPDURL>
+        <controlURL>/AVTransport/control</controlURL>
+        <eventSubURL>/AVTransport/event</eventSubURL>
+      </service>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:RenderingControl</serviceId>
+        <SCPDURL>/RenderingControl/scpd.xml</SCPDURL>
+        <controlURL>/RenderingControl/control</controlURL>
+        <eventSubURL>/RenderingControl/event</eventSubURL>
+      </service>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId>
+        <SCPDURL>/ConnectionManager/scpd.xml</SCPDURL>
+        <controlURL>/ConnectionManager/control</controlURL>
+        <eventSubURL>/ConnectionManager/event</eventSubURL>
+      </service>
+    </serviceList>
   </device>
 </root>'''
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/xml')
                     self.end_headers()
                     self.wfile.write(xml.encode('utf-8'))
+                elif self.path.endswith('.xml'):
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/xml')
+                    self.end_headers()
+                    self.wfile.write(b'<scpd xmlns="urn:schemas-upnp-org:service-1-0"><specVersion><major>1</major><minor>0</minor></specVersion><actionList/></scpd>')
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -259,7 +344,15 @@ def test_description_xml():
                 pass  # Suppress logs
         
         # Start server in background
-        server = HTTPServer(('0.0.0.0', DLNA_SERVER_PORT), SimpleHandler)
+        try:
+            server = HTTPServer(('0.0.0.0', DLNA_SERVER_PORT), SimpleHandler)
+        except OSError as e:
+            if e.errno == 98 or getattr(e, 'winerror', 0) == 10048:
+                print(f"❌ Port {DLNA_SERVER_PORT} is already in use! The bridge might still be running.")
+                print("   Please STOP the main bridge script before running diagnostics.")
+                return False
+            raise e
+            
         server_thread = threading.Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
         

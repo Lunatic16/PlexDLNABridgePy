@@ -1,7 +1,26 @@
-from typing import List, Optional
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List, Optional, Type, Tuple, Any
+from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource, DotEnvSettingsSource, EnvSettingsSource
 from pydantic import Field
+from pydantic.fields import FieldInfo
 import uuid
+
+class CommaSeparatedListMixin:
+    def prepare_field_value(
+        self, field_name: str, field: FieldInfo, value: Any, value_is_complex: bool
+    ) -> Any:
+        if field_name == 'device_uuid':
+            # print(f"DEBUG: prepare_field_value for {field_name} value='{value}' source={self.__class__.__name__}")
+            if value == '':
+                return None
+        if field_name == 'speaker_ips' and isinstance(value, str) and not value.strip().startswith('['):
+            return [x.strip() for x in value.split(',') if x.strip()]
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
+
+class CustomEnvSettingsSource(CommaSeparatedListMixin, EnvSettingsSource):
+    pass
+
+class CustomDotEnvSettingsSource(CommaSeparatedListMixin, DotEnvSettingsSource):
+    pass
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
@@ -22,5 +41,21 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: Type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            CustomEnvSettingsSource(settings_cls),
+            CustomDotEnvSettingsSource(settings_cls, env_file='.env'),
+            file_secret_settings,
+        )
 
 settings = Settings()
